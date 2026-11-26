@@ -18,10 +18,10 @@ The report provides a convenient overview of AI usage over the previous 24 hours
 
 ## ✨ Key Features
 
-- **Automated daily reports** - scheduled execution every day at 22:00.
+- **Automated daily reports** - scheduled execution every day at 22:00 (configurable).
 - **Token consumption tracking** - total, prompt, and completion tokens.
-- **Model usage breakdown** - token consumption grouped by AI model.
-- **Workflow usage breakdown** - execution counts, tokens, and costs grouped by root run name.
+- **Model usage breakdown** - calls, tokens, and costs grouped by AI model.
+- **Workflow usage breakdown** - run counts, tokens, and costs grouped by root run name.
 - **Cost monitoring** - estimated usage costs in USD.
 - **Telegram notifications** - readable HTML-formatted reports.
 - **Pagination support** - retrieves data across multiple pages of LangSmith API results.
@@ -59,7 +59,7 @@ Query LangSmith LLM Runs (24h)
 
 | Component | Responsibility |
 |---|---|
-| Schedule Trigger (22:00) | Starts the workflow every day at 22:00 (Europe/Kyiv). |
+| Schedule Trigger (22:00) | Starts the workflow every day at 22:00 in the workflow timezone. |
 | Query LangSmith Runs (24h) | Retrieves root runs and their token and cost information. |
 | Query LangSmith LLM Runs (24h) | Retrieves individual LLM runs for model-level statistics. |
 | Aggregate Tokens | Processes and groups the collected data using JavaScript. |
@@ -71,7 +71,7 @@ Query LangSmith LLM Runs (24h)
 
 The workflow starts automatically every day at 22:00.
 
-- Timezone: `Europe/Kyiv`
+- Timezone: taken from the workflow settings (the exported file uses `Europe/Kyiv`; change it to your own).
 - Cron expression:
 
 ```cron
@@ -139,12 +139,14 @@ $input.all()
 
 No Merge node is required.
 
+> **Note:** the Code node references the first request node by its name. If you rename `Query LangSmith Runs (24h)`, update this reference in the code as well.
+
 The aggregation logic performs three main tasks.
 
 **Root run statistics**
 
 - Groups runs by workflow or chain name.
-- Calculates execution counts.
+- Calculates run counts.
 - Aggregates prompt, completion, and total tokens.
 - Calculates costs.
 - Builds overall usage statistics.
@@ -159,9 +161,8 @@ The aggregation logic performs three main tasks.
 **Report formatting**
 
 - Sorts workflows and models by token consumption.
-- Displays the top 10 workflows.
-- Displays the top 5 models.
-- Groups remaining entries into summary categories.
+- Displays the top 10 workflows and the top 5 models.
+- Collapses the remaining entries into a single summary line (count, tokens, cost).
 - Formats token counts into readable K/M values.
 - Formats costs in USD.
 - Escapes HTML characters for Telegram message formatting.
@@ -181,27 +182,23 @@ The report includes:
 
 ## 📊 Report Preview
 
-The report is generated dynamically from LangSmith data.
+The report is generated dynamically from LangSmith data. The labels are currently in Russian; you can change them in the `Aggregate Tokens` Code node.
 
 ```text
-📊 Daily AI Usage Report
+📊 LangSmith за 24 часа
+💰 $X.XX · X.XXM tok · N запусков
+in X.XXM / out XXX.XK
 
-Period: Last 24 hours
+Цепочки
+• Workflow A
+  N запусков · XXX.XK tok · $X.XXX
+• Workflow B
+  N запусков · XX.XK tok · $X.XXX
+…и ещё N: XX.XK tok · $X.XXX
 
-💰 Total Cost: $X.XXXX
-🔢 Total Tokens: XX,XXX
-🚀 Root Runs: XX
-
-📥 Prompt Tokens: XX,XXX
-📤 Completion Tokens: XX,XXX
-
-🔗 Workflows
-- Workflow A: XX,XXX tokens
-- Workflow B: XX,XXX tokens
-
-🤖 Models
-- Model A: XX,XXX tokens
-- Model B: XX,XXX tokens
+Модели
+• model-a: N вызовов · X.XXM tok (in X.XXM / out XX.XK) · $X.XX
+• model-b: N вызовов · XXX.XK tok (in XXX.XK / out XX.XK) · $X.XXX
 ```
 
 ## 🔌 Tracing Integration
@@ -237,26 +234,28 @@ For Langflow, use its supported LangSmith tracing configuration. Refer to the of
 
 ## 🔐 Configuration
 
-Before activating the workflow, configure the following:
+The exported workflow contains placeholders instead of real values. Replace them before activating the workflow:
 
-| Parameter | Description |
-|---|---|
-| LangSmith API key | Authenticates API requests. |
-| LangSmith project/session ID | Identifies the project whose runs should be monitored. |
-| Telegram credentials | Authorizes Telegram message delivery. |
-| Telegram chat ID | Specifies the destination chat. |
-| Schedule timezone | Set to `Europe/Kyiv`. |
+| Placeholder | Where | Description |
+|---|---|---|
+| `YOUR_LANGSMITH_API_KEY` | Both HTTP Request nodes, `x-api-key` header | Authenticates LangSmith API requests. |
+| `YOUR_LANGSMITH_PROJECT_ID` | Both HTTP Request nodes, `session` field in the JSON body | ID of the LangSmith project whose runs should be monitored. |
+| `YOUR_TELEGRAM_CREDENTIAL` / `YOUR_CREDENTIAL_ID` | Telegram node | Select your own Telegram Bot credential in n8n. |
+| `YOUR_TELEGRAM_CHAT_ID` | Telegram node, `chatId` field | Destination chat for the report. |
+
+Also check the **timezone** in the workflow settings and set your own.
 
 ### Security Recommendations
 
-- Store API keys in n8n Credentials or protected environment variables.
+- Store API keys in n8n Credentials (for example, a Header Auth credential for the LangSmith key) or in protected environment variables, rather than typing them directly into node parameters.
 - Never commit API keys, Telegram bot tokens, or other secrets to GitHub.
-- Remove sensitive credentials from exported workflow JSON files before publishing.
+- Remove sensitive values from exported workflow JSON files before publishing.
 - Consider using a dedicated LangSmith project for a specific group of workflows.
 
 ## ⚠️ Limitations
 
 - The report covers a rolling 24-hour period, not a calendar day.
+- Each query is limited by pagination settings (100 runs per page, about 50 pages), so very high-volume projects may be truncated at roughly 5,000 runs per query.
 - Costs are based on the cost information returned by LangSmith. Actual provider billing may differ.
 - LangSmith usage statistics do not directly represent the remaining balance of an AI provider account.
 - Model-level statistics depend on the availability of model and provider metadata in LLM runs.
@@ -268,6 +267,7 @@ Before activating the workflow, configure the following:
 langsmith-daily-usage-report/
 │
 ├── README.md
+├── LICENSE
 │
 ├── doc/
 │   └── workflow.jpg
@@ -279,6 +279,7 @@ langsmith-daily-usage-report/
 The repository contains:
 
 - `README.md` - project documentation.
+- `LICENSE` - license file.
 - `doc/workflow.jpg` - n8n workflow architecture screenshot.
 - `workflow/LangSmith_Daily_Tokens_Report_to_TG.json` - exported n8n workflow, ready for import into another n8n instance.
 
@@ -289,16 +290,15 @@ The repository contains:
 3. Create a new workflow or open the workflow editor.
 4. Select **Import from File**.
 5. Select the downloaded JSON file.
-6. Configure your LangSmith API access and Telegram credentials.
-7. Verify the project/session ID and Telegram chat ID.
-8. Activate the workflow.
-
-Make sure all credentials and configuration parameters are updated before activation.
+6. Replace all placeholders described in the [Configuration](#-configuration) section.
+7. Set your timezone in the workflow settings.
+8. Run the workflow once manually to verify the report.
+9. Activate the workflow (the exported file is inactive by default).
 
 ## 🎯 Project Goal
 
-The goal is simple: make AI usage and cost monitoring accessible without manually checking dashboards and billing pages.
+Make AI usage and cost monitoring accessible without manually checking dashboards and billing pages: a small automated workflow that delivers a daily overview of token consumption, model activity, and estimated costs directly in Telegram.
 
-A small automated workflow provides a daily overview of token consumption, model activity, and estimated costs - directly in Telegram.
+## 📄 License
 
-**Know what your AI workflows consume before the bill arrives.**
+This project is licensed under the MIT License - see the `LICENSE` file for details.
