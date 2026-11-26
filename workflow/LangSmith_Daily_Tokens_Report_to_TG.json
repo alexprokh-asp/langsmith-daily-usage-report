@@ -1,0 +1,220 @@
+{
+  "name": "LangSmith Daily Tokens Report to TG",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 22 * * *"
+            }
+          ]
+        }
+      },
+      "id": "410680cc-9658-4dd7-97b5-c5551ae748dd",
+      "name": "Schedule Trigger (22:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        1344,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.smith.langchain.com/api/v1/runs/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_LANGSMITH_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"session\": [\"YOUR_LANGSMITH_PROJECT_ID\"],\n  \"start_time\": \"{{ $now.minus({ hours: 24 }).toUTC().toISO() }}\",\n  \"is_root\": true,\n  \"limit\": 100,\n  \"select\": [\n    \"id\", \"name\", \"run_type\", \"start_time\",\n    \"total_tokens\", \"prompt_tokens\", \"completion_tokens\",\n    \"total_cost\", \"prompt_cost\", \"completion_cost\", \"session_id\"\n  ]\n}",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "body",
+                    "name": "cursor",
+                    "value": "={{ $response.body.cursors.next }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.cursors?.next }}",
+              "limitPagesFetched": true,
+              "maxRequests": 52
+            }
+          }
+        }
+      },
+      "id": "d3d37419-eba6-4e41-9d73-28d150149af9",
+      "name": "Query LangSmith Runs (24h)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1568,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.smith.langchain.com/api/v1/runs/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_LANGSMITH_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"session\": [\"YOUR_LANGSMITH_PROJECT_ID\"],\n  \"start_time\": \"{{ $now.minus({ hours: 24 }).toUTC().toISO() }}\",\n  \"run_type\": \"llm\",\n  \"limit\": 100,\n  \"select\": [\n    \"id\", \"name\", \"run_type\", \"start_time\",\n    \"total_tokens\", \"prompt_tokens\", \"completion_tokens\",\n    \"total_cost\", \"prompt_cost\", \"completion_cost\",\n    \"extra\"\n  ]\n}",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "body",
+                    "name": "cursor",
+                    "value": "={{ $response.body.cursors.next }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.cursors?.next }}",
+              "limitPagesFetched": true,
+              "maxRequests": 50
+            }
+          }
+        }
+      },
+      "id": "207b808c-b383-4ea1-b5fb-01b6b0b97215",
+      "name": "Query LangSmith LLM Runs (24h)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1568,
+        720
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const TOP_CHAINS = 10;\nconst TOP_MODELS = 5;\n\nconst num = v => {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : 0;\n};\n// HTML escaping for Telegram (no backslashes)\nconst esc = s => String(s)\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;');\nconst tok = n =>\n  n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' :\n  n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(n);\nconst usd = c =>\n  c >= 1 ? '$' + c.toFixed(2) :\n  c >= 0.01 ? '$' + c.toFixed(3) : '$' + c.toFixed(4);\n\nconst collect = items => {\n  const out = [];\n  for (const item of items) {\n    const j = item.json || {};\n    if (Array.isArray(j.runs)) out.push(...j.runs);\n    else if (j.run_type || j.name) out.push(j);\n  }\n  return out;\n};\n\nconst rootRuns = collect($('Query LangSmith Runs (24h)').all());\nconst llmRuns = collect($input.all());\n\nconst now = Date.now();\nconst cutoff = now - 24 * 60 * 60 * 1000;\nconst inWindow = r => {\n  const t = new Date(r.start_time).getTime();\n  return Number.isFinite(t) && t >= cutoff && t <= now;\n};\n\nconst getStats = r => {\n  const usage = r.extra?.usage_metadata || {};\n  const prompt = num(r.prompt_tokens ?? usage.input_tokens);\n  const completion = num(r.completion_tokens ?? usage.output_tokens);\n  const tokens = num(r.total_tokens ?? usage.total_tokens ?? (prompt + completion));\n  let cost = 0;\n  if (r.total_cost != null) cost = num(r.total_cost);\n  else if (r.prompt_cost != null || r.completion_cost != null)\n    cost = num(r.prompt_cost) + num(r.completion_cost);\n  return { prompt, completion, tokens, cost };\n};\n\nconst add = (map, key, s) => {\n  const g = map.get(key) || { count: 0, prompt: 0, completion: 0, tokens: 0, cost: 0 };\n  g.count++; g.prompt += s.prompt; g.completion += s.completion;\n  g.tokens += s.tokens; g.cost += s.cost;\n  map.set(key, g);\n};\n\n// --- Chains ---\nconst byChain = new Map();\nlet totalPrompt = 0, totalCompletion = 0, totalTokens = 0, totalCost = 0;\nconst roots = rootRuns.filter(inWindow);\n\nfor (const r of roots) {\n  const s = getStats(r);\n  totalPrompt += s.prompt; totalCompletion += s.completion;\n  totalTokens += s.tokens; totalCost += s.cost;\n  add(byChain, r.name || 'Unknown chain', s);\n}\n\n// --- Models ---\nconst byModel = new Map();\nfor (const r of llmRuns.filter(inWindow)) {\n  const meta = r.extra?.metadata || {};\n  const params = r.extra?.invocation_params || {};\n  const model = meta.ls_model_name || params.model || params.model_name || 'Unknown model';\n  const provider = meta.ls_provider || 'unknown';\n  add(byModel, `${provider} / ${model}`, getStats(r));\n}\n\nconst sorted = map => [...map.entries()].sort((a, b) => b[1].tokens - a[1].tokens);\n\n// Full chain name, no truncation and no slashes\nconst chainLabel = full => `<b>${esc(full)}</b>`;\n\n// \"openai / gpt-4.1\" -> \"gpt-4.1\"\nconst modelLabel = full => esc(full.split(' / ').slice(1).join(' / ') || full);\n\nconst restLine = (entries, top) => {\n  const rest = entries.slice(top);\n  if (!rest.length) return '';\n  const t = rest.reduce((a, [, s]) => a + s.tokens, 0);\n  const c = rest.reduce((a, [, s]) => a + s.cost, 0);\n  return `\\n…и ещё ${rest.length}: ${tok(t)} tok · ${usd(c)}`;\n};\n\nconst chains = sorted(byChain);\nconst models = sorted(byModel);\n\nconst chainText = chains.slice(0, TOP_CHAINS).map(([name, s]) =>\n  `• ${chainLabel(name)}\\n  ${s.count} запусков · ${tok(s.tokens)} tok · ${usd(s.cost)}`\n).join('\\n') + restLine(chains, TOP_CHAINS);\n\nconst modelText = models.slice(0, TOP_MODELS).map(([name, s]) =>\n  `• <b>${modelLabel(name)}</b>: ${s.count} вызовов · ${tok(s.tokens)} tok (in ${tok(s.prompt)} / out ${tok(s.completion)}) · ${usd(s.cost)}`\n).join('\\n') + restLine(models, TOP_MODELS);\n\nconst text = [\n  '📊 <b>LangSmith за 24 часа</b>',\n  `💰 <b>${usd(totalCost)}</b> · ${tok(totalTokens)} tok · ${roots.length} запусков`,\n  `in ${tok(totalPrompt)} / out ${tok(totalCompletion)}`,\n  '',\n  '<b>Цепочки</b>',\n  chainText || 'Нет данных',\n  '',\n  '<b>Модели</b>',\n  modelText || 'Нет данных'\n].join('\\n');\n\nreturn [{ json: { text, runsCount: roots.length, totalTokens, totalCost } }];"
+      },
+      "id": "edc1cbf2-51f6-4f48-95f7-0e65b6a4c3b4",
+      "name": "Aggregate Tokens",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "4b8a3765-683b-484d-86b8-a721ab8ad73e",
+      "name": "Send Daily Report to TG",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1936,
+        608
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_TELEGRAM_CREDENTIAL"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger (22:00)": {
+      "main": [
+        [
+          {
+            "node": "Query LangSmith Runs (24h)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query LangSmith Runs (24h)": {
+      "main": [
+        [
+          {
+            "node": "Query LangSmith LLM Runs (24h)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query LangSmith LLM Runs (24h)": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Tokens",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Tokens": {
+      "main": [
+        [
+          {
+            "node": "Send Daily Report to TG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Europe/Kyiv",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "meta": {},
+  "nodeGroups": [],
+  "tags": []
+}
